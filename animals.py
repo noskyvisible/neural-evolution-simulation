@@ -283,6 +283,249 @@ class Fox(Animal):
         self.hunt(world)
 
 
+class Pack:
+    def __init__(self, pack_id):
+        self.pack_id = pack_id
+        self.members = []
+        self.alpha_male = None
+        self.alpha_female = None
+        self.pack_center_x = 0
+        self.pack_center_y = 0
+        self.hunting_target = None
+        self.pack_coordination = 0.5  # How well the pack works together
+
+    def update_pack_center(self):
+        if not self.members:
+            return
+        self.pack_center_x = sum(wolf.x for wolf in self.members) / len(self.members)
+        self.pack_center_y = sum(wolf.y for wolf in self.members) / len(self.members)
+
+    def add_member(self, wolf):
+        self.members.append(wolf)
+        wolf.pack = self
+        wolf.pack_id = self.pack_id
+        self.update_hierarchy()
+
+    def remove_member(self, wolf):
+        if wolf in self.members:
+            self.members.remove(wolf)
+            wolf.pack = None
+            wolf.pack_id = None
+            self.update_hierarchy()
+
+    def update_hierarchy(self):
+        if not self.members:
+            self.alpha_male = None
+            self.alpha_female = None
+            return
+
+        males = [w for w in self.members if w.gender == 'male' and w.is_alive()]
+        females = [w for w in self.members if w.gender == 'female' and w.is_alive()]
+
+        self.alpha_male = max(males, key=lambda w: w.pack_dominance) if males else None
+        self.alpha_female = max(females, key=lambda w: w.pack_dominance) if females else None
+
+    def get_pack_size(self):
+        return len([w for w in self.members if w.is_alive()])
+
+    def is_hunting(self):
+        return self.hunting_target is not None
+
+
+class Wolf(Animal):
+    def __init__(self, x, y, world_width, world_height, gender=None, pack_id=None):
+        super().__init__(x, y, world_width, world_height, gender)
+        self.brain = NeuralNetwork(input_size=14, hidden_sizes=[16, 14], output_size=3)
+        self.vision_range = 100
+        self.hunt_range = 20
+        self.reproduction_energy = 100
+        self.kills = 0
+        self.pack = None
+        self.pack_id = pack_id
+        self.pack_dominance = random.uniform(0.3, 1.0)
+        self.howl_cooldown = 0
+        self.pack_loyalty = random.uniform(0.5, 1.0)
+        self.hunting_coordination = random.uniform(0.3, 0.8)
+        self.max_age = 2500
+        self.energy = 120
+
+    def get_inputs(self, world):
+        inputs = super().get_inputs(world)
+
+        # Find nearest rabbit
+        nearest_prey_dist = float('inf')
+        nearest_prey_angle = 0
+        prey_count_nearby = 0
+        for rabbit in world.rabbits:
+            dist = self.distance_to(rabbit)
+            if dist < self.vision_range:
+                prey_count_nearby += 1
+                if dist < nearest_prey_dist:
+                    nearest_prey_dist = dist
+                    angle = math.atan2(rabbit.y - self.y, rabbit.x - self.x)
+                    nearest_prey_angle = angle - self.direction
+
+        # Find nearest fox (competition)
+        nearest_competitor_dist = float('inf')
+        for fox in world.foxes:
+            dist = self.distance_to(fox)
+            if dist < nearest_competitor_dist and dist < self.vision_range:
+                nearest_competitor_dist = dist
+
+        # Pack information
+        pack_center_dist = float('inf')
+        pack_center_angle = 0
+        pack_size = 0
+        is_alpha = 0
+
+        if self.pack:
+            pack_size = self.pack.get_pack_size()
+            is_alpha = 1 if (self == self.pack.alpha_male or self == self.pack.alpha_female) else 0
+            self.pack.update_pack_center()
+            pack_center_dist = math.sqrt((self.x - self.pack.pack_center_x)**2 +
+                                       (self.y - self.pack.pack_center_y)**2)
+            if pack_center_dist > 0:
+                angle = math.atan2(self.pack.pack_center_y - self.y, self.pack.pack_center_x - self.x)
+                pack_center_angle = angle - self.direction
+
+        # Find nearest potential mate
+        nearest_mate_dist = float('inf')
+        nearest_mate_angle = 0
+        if self.mate_seeking:
+            mate = self.find_mate(world.wolves)
+            if mate:
+                nearest_mate_dist = self.distance_to(mate)
+                angle = math.atan2(mate.y - self.y, mate.x - self.x)
+                nearest_mate_angle = angle - self.direction
+
+        inputs.extend([
+            min(nearest_prey_dist / self.vision_range, 1.0) if nearest_prey_dist < self.vision_range else 0,
+            math.cos(nearest_prey_angle) if nearest_prey_dist < self.vision_range else 0,
+            min(prey_count_nearby / 10.0, 1.0),  # Prey density
+            min(nearest_competitor_dist / self.vision_range, 1.0) if nearest_competitor_dist < self.vision_range else 0,
+            min(pack_center_dist / 100.0, 1.0),  # Distance to pack center
+            math.cos(pack_center_angle),
+            min(pack_size / 8.0, 1.0),  # Pack size normalized
+            is_alpha,
+            min(nearest_mate_dist / self.vision_range, 1.0) if self.mate_seeking and nearest_mate_dist < self.vision_range else 0,
+        ])
+
+        return inputs
+
+    def process_outputs(self, outputs):
+        # outputs[0]: turn left/right (-1 to 1)
+        # outputs[1]: speed (0 to 1)
+        # outputs[2]: howl/communicate (0 to 1)
+
+        self.direction += (outputs[0] - 0.5) * 0.25  # Pack coordination affects turning
+        self.speed = outputs[1] * 2.5  # Wolves are faster than foxes
+
+        # Howling/communication
+        if outputs[2] > 0.7 and self.howl_cooldown == 0:
+            self.howl()
+            self.howl_cooldown = 100
+
+        if self.howl_cooldown > 0:
+            self.howl_cooldown -= 1
+
+    def howl(self):
+        # Howling helps coordinate pack and attract distant members
+        if self.pack:
+            for wolf in self.pack.members:
+                if wolf != self and self.distance_to(wolf) < 150:
+                    # Boost pack coordination
+                    wolf.fitness += 1
+                    # Help lost pack members find the group
+                    if self.distance_to(wolf) > 80:
+                        angle_to_pack = math.atan2(self.y - wolf.y, self.x - wolf.x)
+                        wolf.direction = angle_to_pack + random.uniform(-0.3, 0.3)
+
+    def hunt(self, world):
+        # Pack hunting is more effective
+        hunt_bonus = 1.0
+        if self.pack and self.pack.get_pack_size() > 1:
+            hunt_bonus = 1.0 + (self.pack.get_pack_size() - 1) * 0.3
+            hunt_bonus *= self.pack.pack_coordination
+
+        effective_hunt_range = self.hunt_range * hunt_bonus
+
+        for rabbit in world.rabbits[:]:
+            if self.distance_to(rabbit) < effective_hunt_range:
+                # Pack hunting success rate
+                success_chance = 0.4  # Base chance
+                if self.pack:
+                    # More wolves nearby = higher success rate
+                    nearby_pack_members = sum(1 for w in self.pack.members
+                                            if w != self and w.distance_to(rabbit) < 50)
+                    success_chance += nearby_pack_members * 0.2
+                    success_chance = min(success_chance, 0.9)  # Cap at 90%
+
+                if random.random() < success_chance:
+                    world.rabbits.remove(rabbit)
+                    # Shared kill - all nearby pack members get energy
+                    energy_gain = 60
+                    if self.pack:
+                        nearby_wolves = [w for w in self.pack.members
+                                       if w.distance_to(rabbit) < 60]
+                        if len(nearby_wolves) > 1:
+                            energy_per_wolf = energy_gain / len(nearby_wolves)
+                            for wolf in nearby_wolves:
+                                wolf.energy += energy_per_wolf
+                                wolf.kills += 1 / len(nearby_wolves)  # Shared kill credit
+                                wolf.fitness += 15
+                        else:
+                            self.energy += energy_gain
+                            self.kills += 1
+                            self.fitness += 12
+                    else:
+                        self.energy += energy_gain * 0.7  # Lone wolves less efficient
+                        self.kills += 1
+                        self.fitness += 8
+                    break
+
+    def give_birth(self):
+        if not self.is_pregnant:
+            return None
+
+        child = Wolf(self.x + random.uniform(-20, 20),
+                    self.y + random.uniform(-20, 20),
+                    self.world_width, self.world_height,
+                    pack_id=self.pack_id if self.pack else None)
+
+        child.brain = self.brain.copy()
+        child.brain.mutate(mutation_rate=0.1, mutation_strength=0.15)
+
+        # Inherit some pack traits
+        if self.pack:
+            child.pack_loyalty = self.pack_loyalty + random.uniform(-0.1, 0.1)
+            child.hunting_coordination = self.hunting_coordination + random.uniform(-0.1, 0.1)
+            child.pack_dominance = self.pack_dominance + random.uniform(-0.2, 0.2)
+            # Clamp values
+            child.pack_loyalty = max(0.1, min(1.0, child.pack_loyalty))
+            child.hunting_coordination = max(0.1, min(1.0, child.hunting_coordination))
+            child.pack_dominance = max(0.1, min(1.0, child.pack_dominance))
+
+        self.is_pregnant = False
+        return child
+
+    def update(self, world):
+        birth = super().update(world)
+        self.hunt(world)
+
+        # Pack behavior updates
+        if self.pack:
+            # Stay closer to pack if loyalty is high
+            pack_distance = math.sqrt((self.x - self.pack.pack_center_x)**2 +
+                                    (self.y - self.pack.pack_center_y)**2)
+            if pack_distance > 200 and self.pack_loyalty > 0.7:
+                # Move towards pack center
+                angle_to_pack = math.atan2(self.pack.pack_center_y - self.y,
+                                         self.pack.pack_center_x - self.x)
+                self.direction = angle_to_pack + random.uniform(-0.5, 0.5)
+
+        return birth
+
+
 class Food:
     def __init__(self, x, y):
         self.x = x

@@ -44,11 +44,19 @@ def main():
                     # Prevent empty populations
                     if len(world.rabbits) == 0:
                         print("Rabbits extinct! Respawning...")
-                        world.rabbits = evolution_manager.create_random_population(20, type(world.rabbits[0]) if world.rabbits else world.Rabbit)
+                        from animals import Rabbit
+                        world.rabbits = evolution_manager.create_random_population(20, Rabbit)
 
                     if len(world.foxes) == 0:
                         print("Foxes extinct! Respawning...")
-                        world.foxes = evolution_manager.create_random_population(8, type(world.foxes[0]) if world.foxes else world.Fox)
+                        from animals import Fox
+                        world.foxes = evolution_manager.create_random_population(8, Fox)
+
+                    if len(world.wolves) == 0:
+                        print("Wolves extinct! Respawning...")
+                        from animals import Wolf
+                        world.wolves = evolution_manager.create_random_population(6, Wolf)
+                        world.create_initial_packs()
 
             # Update display
             visualizer.update_display(world, evolution_manager, frame_rate)

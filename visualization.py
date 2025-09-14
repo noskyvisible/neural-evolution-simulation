@@ -8,7 +8,7 @@ class Visualizer:
         self.width = width
         self.height = height
         self.screen = pygame.display.set_mode((width + 200, height))  # Extra space for stats
-        pygame.display.set_caption("Neural Network Evolution - Foxes and Rabbits")
+        pygame.display.set_caption("Neural Network Evolution - Wolves, Foxes and Rabbits")
 
         # Colors
         self.WHITE = (255, 255, 255)
@@ -26,6 +26,10 @@ class Visualizer:
         self.GRAY = (128, 128, 128)
         self.DARK_GRAY = (64, 64, 64)
         self.LIGHT_GRAY = (211, 211, 211)
+        self.SILVER = (192, 192, 192)
+        self.DARK_SILVER = (169, 169, 169)
+        self.GOLD = (255, 215, 0)
+        self.FOREST_GREEN = (34, 139, 34)
 
         # Fonts
         self.font = pygame.font.Font(None, 24)
@@ -164,6 +168,92 @@ class Visualizer:
             energy_color = self.GREEN if energy_ratio > 0.5 else (self.ORANGE if energy_ratio > 0.25 else self.RED)
             pygame.draw.rect(self.screen, energy_color, (bar_x, bar_y, int(bar_width * energy_ratio), bar_height))
 
+        # Draw wolves with pack indicators
+        for wolf in world.wolves:
+            x, y = int(wolf.x), int(wolf.y)
+
+            # Choose colors based on gender
+            body_color = self.SILVER if wolf.gender == 'male' else self.DARK_SILVER
+            accent_color = self.BLUE if wolf.gender == 'male' else self.PINK
+
+            # Draw wolf body (larger and more wolf-like)
+            pygame.draw.ellipse(self.screen, body_color, (x-10, y-7, 20, 14))
+            pygame.draw.circle(self.screen, body_color, (x, y), 9)
+
+            # Draw pointed ears
+            pygame.draw.polygon(self.screen, body_color, [
+                (x-5, y-9), (x-2, y-14), (x+1, y-9)
+            ])
+            pygame.draw.polygon(self.screen, body_color, [
+                (x-1, y-9), (x+2, y-14), (x+5, y-9)
+            ])
+
+            # Draw tail
+            tail_x = x - math.cos(wolf.direction) * 12
+            tail_y = y - math.sin(wolf.direction) * 12
+            pygame.draw.ellipse(self.screen, body_color, (int(tail_x-3), int(tail_y-2), 6, 4))
+
+            # Pack indicators
+            if wolf.pack:
+                # Pack member indicator (colored ring)
+                pack_color_index = wolf.pack.pack_id % 7
+                pack_colors = [self.RED, self.BLUE, self.GREEN, self.PURPLE, self.ORANGE, self.GOLD, self.PINK]
+                pack_color = pack_colors[pack_color_index]
+                pygame.draw.circle(self.screen, pack_color, (x, y), 14, 2)
+
+                # Alpha indicators
+                if wolf == wolf.pack.alpha_male or wolf == wolf.pack.alpha_female:
+                    pygame.draw.circle(self.screen, self.GOLD, (x, y), 16, 3)
+                    # Crown symbol for alpha
+                    crown_points = [(x-4, y-12), (x-2, y-16), (x, y-14), (x+2, y-16), (x+4, y-12)]
+                    pygame.draw.lines(self.screen, self.GOLD, False, crown_points, 2)
+            else:
+                # Lone wolf indicator
+                pygame.draw.circle(self.screen, self.GRAY, (x, y), 13, 1)
+
+            # Gender indicator
+            pygame.draw.circle(self.screen, accent_color, (x-12, y-12), 3)
+
+            # Special states
+            if wolf.is_pregnant:
+                pygame.draw.circle(self.screen, self.PINK, (x, y), 18, 2)
+            elif wolf.mate_seeking:
+                pygame.draw.circle(self.screen, self.PURPLE, (x, y), 17, 1)
+
+            # Draw direction indicator (longer for wolves)
+            end_x = x + math.cos(wolf.direction) * 18
+            end_y = y + math.sin(wolf.direction) * 18
+            pygame.draw.line(self.screen, self.BLACK, (x, y), (int(end_x), int(end_y)), 3)
+
+            # Howling indicator
+            if wolf.howl_cooldown > 80:  # Recently howled
+                pygame.draw.circle(self.screen, self.ORANGE, (x, y-25), 4)
+                pygame.draw.arc(self.screen, self.ORANGE, (x-8, y-33, 16, 16), 0, math.pi, 2)
+
+            # Draw energy bar
+            energy_ratio = wolf.energy / 200  # Updated max energy
+            bar_width = 20
+            bar_height = 4
+            bar_x = x - bar_width // 2
+            bar_y = y - 22
+
+            pygame.draw.rect(self.screen, self.BLACK, (bar_x-1, bar_y-1, bar_width+2, bar_height+2))
+            pygame.draw.rect(self.screen, self.GRAY, (bar_x, bar_y, bar_width, bar_height))
+            energy_color = self.GREEN if energy_ratio > 0.5 else (self.ORANGE if energy_ratio > 0.25 else self.RED)
+            pygame.draw.rect(self.screen, energy_color, (bar_x, bar_y, int(bar_width * energy_ratio), bar_height))
+
+        # Draw pack territories (faint background circles)
+        for pack in world.packs:
+            if pack.get_pack_size() > 1:
+                pack_color_index = pack.pack_id % 7
+                pack_colors = [self.RED, self.BLUE, self.GREEN, self.PURPLE, self.ORANGE, self.GOLD, self.PINK]
+                pack_color = pack_colors[pack_color_index]
+                center_x, center_y = int(pack.pack_center_x), int(pack.pack_center_y)
+                # Create a surface for transparency
+                territory_surface = pygame.Surface((160, 160), pygame.SRCALPHA)
+                pygame.draw.circle(territory_surface, (*pack_color, 30), (80, 80), 80)
+                self.screen.blit(territory_surface, (center_x - 80, center_y - 80))
+
     def draw_stats(self, world, evolution_manager):
         # Stats panel background
         stats_x = self.width + 10
@@ -193,21 +283,34 @@ class Visualizer:
             f"  Females: {stats['fox_females']}",
             f"  Pregnant: {stats['pregnant_foxes']}",
             "",
+            f"Wolves: {stats['wolves']}",
+            f"  Males: {stats['wolf_males']}",
+            f"  Females: {stats['wolf_females']}",
+            f"  Pregnant: {stats['pregnant_wolves']}",
+            f"  Packs: {stats['packs']}",
+            "",
             f"Food: {stats['food']}",
             "",
             f"Avg Energy:",
             f"  Rabbits: {stats['rabbit_avg_energy']:.1f}",
             f"  Foxes: {stats['fox_avg_energy']:.1f}",
+            f"  Wolves: {stats['wolf_avg_energy']:.1f}",
             "",
             f"Avg Age:",
             f"  Rabbits: {stats['rabbit_avg_age']:.0f}",
             f"  Foxes: {stats['fox_avg_age']:.0f}",
+            f"  Wolves: {stats['wolf_avg_age']:.0f}",
             "",
             "Legend:",
             "Brown/Light = Rabbits M/F",
             "Red/Dark Red = Foxes M/F",
+            "Silver/Dark = Wolves M/F",
+            "Colored rings = Pack member",
+            "Gold crown = Alpha wolf",
+            "Gray ring = Lone wolf",
             "Purple ring = Seeking mate",
             "Pink ring = Pregnant",
+            "Orange dot = Recently howled",
             "",
             "Controls:",
             "SPACE - Pause/Resume",
